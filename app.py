@@ -1,6 +1,10 @@
 # =========================
 # Imports
 # =========================
+
+import unsloth
+from unsloth import FastLanguageModel
+
 import torch
 import faiss
 import pandas as pd
@@ -8,7 +12,6 @@ import numpy as np
 
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
-from unsloth import FastLanguageModel
 
 
 # =========================
