@@ -1,0 +1,11 @@
+torch
+transformers
+accelerate
+bitsandbytes
+safetensors
+peft
+unsloth
+sentence-transformers
+faiss-cpu
+pandas
+numpy
