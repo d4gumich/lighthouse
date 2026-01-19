@@ -5,7 +5,6 @@ import unsloth
 from unsloth import FastLanguageModel
 
 import os
-import torch
 import faiss
 import pandas as pd
 import numpy as np
@@ -18,23 +17,29 @@ from transformers import pipeline
 # Configuration
 # =========================
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-LORA_REPO = "./job_reco_lora"   # <-- change to your HF LoRA repo
 
-DATA_PATH  = "job_skill_results.csv"
-FAISS_DIR  = "data"
+# Local LoRA folder (EXTRACTED, not zip)
+LORA_PATH = "./job_reco_lora"
+
+DATA_PATH = "job_skill_results.csv"
+
+FAISS_DIR = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
 
 TOP_K = 3
 
 
 # =========================
-# Ensure writable dirs
+# Prepare directories
 # =========================
 os.makedirs(FAISS_DIR, exist_ok=True)
 
+assert os.path.exists(LORA_PATH), f"LoRA folder not found: {LORA_PATH}"
+assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
+
 
 # =========================
-# Load Embedding Model (CPU)
+# Load embedding model (CPU)
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-large-en-v1.5",
@@ -43,14 +48,13 @@ embedder = SentenceTransformer(
 
 
 # =========================
-# Load Job Data
+# Load job data
 # =========================
-assert os.path.exists(DATA_PATH), f"Missing file: {DATA_PATH}"
 df = pd.read_csv(DATA_PATH)
 
 
 # =========================
-# Build / Load FAISS Index
+# Build / Load FAISS index
 # =========================
 job_texts = (
     df["title"].fillna("") + " " +
@@ -70,8 +74,8 @@ else:
     )
 
     faiss.normalize_L2(embeddings)
-    dim = embeddings.shape[1]
 
+    dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
     index.add(embeddings)
 
@@ -79,22 +83,20 @@ else:
 
 
 # =========================
-# Load Base Model + LoRA (GPU REQUIRED)
+# Load base model + LoRA (GPU REQUIRED)
 # =========================
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=BASE_MODEL,
     load_in_4bit=True,
     max_seq_length=4096,
+    lora_path=LORA_PATH,   # ✅ CORRECT WAY
 )
-
-model.load_adapter(LORA_REPO, adapter_name="job_lora")
-model.set_adapter("job_lora")
 
 FastLanguageModel.for_inference(model)
 
 
 # =========================
-# Text Generation Pipeline
+# Text generation pipeline
 # =========================
 llm = pipeline(
     "text-generation",
@@ -107,7 +109,7 @@ llm = pipeline(
 
 
 # =========================
-# Skill Extraction (LoRA)
+# Skill extraction (LoRA)
 # =========================
 def extract_skills(resume_text: str) -> str:
     prompt = (
@@ -120,7 +122,7 @@ def extract_skills(resume_text: str) -> str:
 
 
 # =========================
-# RAG Retrieval
+# RAG retrieval
 # =========================
 def retrieve_jobs(candidate_skills: str, k: int = TOP_K):
     query_emb = embedder.encode([candidate_skills], convert_to_numpy=True)
@@ -141,7 +143,7 @@ def retrieve_jobs(candidate_skills: str, k: int = TOP_K):
 
 
 # =========================
-# Recommendation Generation
+# Recommendation generation
 # =========================
 def recommend_jobs(candidate_skills: str, jobs: list) -> str:
     prompt = f"Candidate skills: {candidate_skills}\n\n"
@@ -161,7 +163,7 @@ def recommend_jobs(candidate_skills: str, jobs: list) -> str:
 
 
 # =========================
-# End-to-End Pipeline
+# End-to-end pipeline
 # =========================
 def run_pipeline(resume_text: str):
     skills = extract_skills(resume_text)
@@ -176,12 +178,12 @@ def run_pipeline(resume_text: str):
 
 
 # =========================
-# Local Test (HF ignores this)
+# Local test (ignored by HF)
 # =========================
 if __name__ == "__main__":
     test_resume = """
     Data Scientist with experience in NLP, LLMs, Python, SQL,
-    RAG pipelines, FAISS, transformers, and machine learning.
+    FAISS-based RAG systems, transformers, and machine learning.
     """
 
     output = run_pipeline(test_resume)
