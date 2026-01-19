@@ -93,13 +93,9 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 
 # Load the LoRA adapter (folder or root with LoRA files)
-model.load_adapter(
-    adapter_path=LORA_PATH,
-    adapter_name="job_lora"  # give it any name
-)
-
-# Set the adapter for inference
-model.set_adapter("job_lora")
+# Load LoRA
+model.load_adapter(LORA_PATH)   # ONLY pass the path
+model.set_adapter("job_lora")   # Give the adapter a name
 FastLanguageModel.for_inference(model)
 
 
