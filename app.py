@@ -18,7 +18,7 @@ from transformers import pipeline
 # Configuration
 # =========================
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-LORA_REPO = "./job-reco-lora"   # <-- change to your HF LoRA repo
+LORA_REPO = "./job_reco_lora"   # <-- change to your HF LoRA repo
 
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
