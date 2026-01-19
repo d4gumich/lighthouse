@@ -85,13 +85,21 @@ else:
 # =========================
 # Load base model + LoRA (GPU REQUIRED)
 # =========================
+# Load base model first
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=BASE_MODEL,
     load_in_4bit=True,
     max_seq_length=4096,
-    lora_path=LORA_PATH,  
 )
 
+# Load the LoRA adapter (folder or root with LoRA files)
+model.load_adapter(
+    adapter_path=LORA_PATH,
+    adapter_name="job_lora"  # give it any name
+)
+
+# Set the adapter for inference
+model.set_adapter("job_lora")
 FastLanguageModel.for_inference(model)
 
 
