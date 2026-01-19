@@ -19,7 +19,7 @@ from transformers import pipeline
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 # Local LoRA folder (EXTRACTED, not zip)
-LORA_PATH = "./job_reco_lora"
+LORA_PATH = "."
 
 DATA_PATH = "job_skill_results.csv"
 
@@ -34,7 +34,7 @@ TOP_K = 3
 # =========================
 os.makedirs(FAISS_DIR, exist_ok=True)
 
-assert os.path.exists(LORA_PATH), f"LoRA folder not found: {LORA_PATH}"
+#assert os.path.exists(LORA_PATH), f"LoRA folder not found: {LORA_PATH}"
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 
@@ -89,7 +89,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=BASE_MODEL,
     load_in_4bit=True,
     max_seq_length=4096,
-    lora_path=LORA_PATH,   # ✅ CORRECT WAY
+    lora_path=LORA_PATH,  
 )
 
 FastLanguageModel.for_inference(model)
