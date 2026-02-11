@@ -79,6 +79,7 @@ llm = pipeline(
     max_new_tokens=400,
     temperature=0.4,
     do_sample=False,
+    return_full_text=False,
     pad_token_id=tokenizer.eos_token_id,
 )
 
