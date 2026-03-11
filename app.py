@@ -628,16 +628,33 @@ def extract_text_from_pdf(uploaded_file) -> str:
 
 
 def extract_skills(llm, resume_text: str) -> str:
-    prompt = (
-        "Extract ONLY the skills explicitly mentioned in the resume. "
-        "Return ONLY a comma-separated list. Do not add explanations.\n\n"
-        f"{resume_text[:3000]}"
-    )
-    out = llm(prompt)[0]["generated_text"].strip()
-    # Strip the prompt echo if model returns it
-    if resume_text[:50] in out:
-        out = out.split(resume_text[:50])[-1].strip()
-    return out
+    # Llama 3 instruct chat format forces the model to follow instructions
+    prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a skill extractor. Output ONLY a comma-separated list of skills. No sentences. No explanations. No resume text. Just skills separated by commas.<|eot_id|><|start_header_id|>user<|end_header_id|>
+Extract all technical skills, tools, programming languages, frameworks, and domain expertise from this resume. Output ONLY a comma-separated list.
+
+Resume:
+{resume_text[:3000]}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"""
+
+    out = llm(
+        prompt,
+        max_new_tokens=200,
+        temperature=0.1,
+        do_sample=False,
+    )[0]["generated_text"].strip()
+
+    # Extract only the part after the assistant header
+    if "<|start_header_id|>assistant<|end_header_id|>" in out:
+        out = out.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
+
+    # Clean up — find the line with commas (the skills list)
+    lines_out = [l.strip() for l in out.strip().splitlines() if l.strip()]
+    for line in lines_out:
+        if "," in line and len(line) < 800:
+            return line.strip()
+
+    return lines_out[0] if lines_out else out.strip()
 
 
 def retrieve_jobs(embedder, index, df, candidate_skills: str, k: int = TOP_K):
@@ -705,6 +722,33 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# =========================
+# PRELOAD MODELS ON STARTUP
+# =========================
+if "models_loaded" not in st.session_state:
+    st.session_state.models_loaded = False
+
+if not st.session_state.models_loaded:
+    with st.spinner(""):
+        st.markdown("""
+        <div style="background:#0E0E0E;border:1px solid #252525;border-left:3px solid #D4A853;
+        border-radius:0 6px 6px 0;padding:1rem 1.4rem;margin-bottom:1rem;
+        font-family:IBM Plex Mono,monospace;font-size:0.78rem;color:#7A7468;letter-spacing:0.05em;">
+        Initialising — Loading Llama 3.1 8B + LoRA into GPU. Takes 3-4 min on first load.
+        </div>
+        """, unsafe_allow_html=True)
+        load_models()
+        st.session_state.models_loaded = True
+        st.rerun()
+else:
+    st.markdown("""
+    <div style="background:#0E0E0E;border:1px solid #1C1C1C;border-left:3px solid #4A7C59;
+    border-radius:0 6px 6px 0;padding:0.6rem 1.4rem;margin-bottom:1rem;
+    font-family:IBM Plex Mono,monospace;font-size:0.72rem;color:#4A7C59;letter-spacing:0.05em;">
+    Models ready — Llama 3.1 8B + LoRA + FAISS loaded
+    </div>
+    """, unsafe_allow_html=True)
 
 # =========================
 # TWO-COLUMN LAYOUT
