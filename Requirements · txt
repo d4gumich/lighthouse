@@ -1,0 +1,10 @@
+unsloth
+streamlit>=1.35.0
+transformers>=4.40.0
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+pandas>=2.0.0
+numpy>=1.26.0
+PyMuPDF>=1.24.0
+torch>=2.3.0
+peft>=0.11.0
