@@ -22,7 +22,8 @@ BASE_MODEL = "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
 
 # FIX 2: load adapter from your HF model repo
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
-HF_TOKEN   = os.environ.get("HF_TOKEN")   # set in Space secrets
+HF_TOKEN   = None
+#HF_TOKEN   = os.environ.get("HF_TOKEN")   # set in Space secrets
 
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
