@@ -4,6 +4,7 @@
 import unsloth
 from unsloth import FastLanguageModel
 import torch
+torch.backends.cuda.enable_flash_sdp(False)
 import os
 import faiss
 import pandas as pd
@@ -76,14 +77,14 @@ else:
 
 # =========================
 # Load base model + LoRA
-# FIX 3: use PeftModel.from_pretrained to load from HF Hub
+# use PeftModel.from_pretrained to load from HF Hub
 # =========================
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name     = BASE_MODEL,
     load_in_4bit   = True,
-    max_seq_length = 4096,
+    max_seq_length = 2048,
 )
-
+tokenizer.pad_token = tokenizer.eos_token
 # Load your LoRA adapter from HF model repo
 model = PeftModel.from_pretrained(
     model,
