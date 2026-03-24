@@ -113,9 +113,19 @@ def extract_skills(resume_text: str) -> str:
     prompt = (
         "Extract ONLY the skills explicitly mentioned in the resume. "
         "Return ONLY a comma-separated list. Do not add explanations.\n\n"
-        f"{resume_text}"
+        f"{resume_text[:3000]}"
     )
-    return llm(prompt)[0]["generated_text"].strip()
+    inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens = 200,
+            temperature    = 0.1,
+            do_sample      = False,
+            use_cache      = True,
+        )
+    generated = outputs[0][inputs["input_ids"].shape[1]:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 # =========================
 # RAG retrieval
@@ -139,7 +149,7 @@ def retrieve_jobs(candidate_skills: str, k: int = TOP_K):
 # Recommendation generation
 # =========================
 def recommend_jobs(candidate_skills: str, jobs: list) -> str:
-    prompt = f"Candidate skills: {candidate_skills}\n\n"
+  prompt = f"Candidate skills: {candidate_skills}\n\n"
     prompt += (
         "Based on the following job matches, summarize each role and "
         "recommend additional job titles requiring similar skills:\n\n"
@@ -150,7 +160,17 @@ def recommend_jobs(candidate_skills: str, jobs: list) -> str:
             f"Description: {job['description']}\n"
             f"Skills: {job['skills']}\n\n"
         )
-    return llm(prompt)[0]["generated_text"]
+    inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens = 400,
+            temperature    = 0.4,
+            do_sample      = False,
+            use_cache      = True,
+        )
+    generated = outputs[0][inputs["input_ids"].shape[1]:]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 # =========================
 # End-to-end pipeline
@@ -169,8 +189,18 @@ def run_pipeline(resume_text: str):
 # Gradio UI — unchanged from original
 # =========================
 def gradio_pipeline(resume_text):
-    result = run_pipeline(resume_text)
-    return result['extracted_skills'], result['top_jobs'], result['recommendations']
+    try:
+        result = run_pipeline(resume_text)
+        return (
+            result['extracted_skills'],
+            result['top_jobs'],
+            result['recommendations']
+        )
+    except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        print(error_msg)  # shows in Space logs
+        return str(e), [], str(e)
 
 demo = gr.Interface(
     fn          = gradio_pipeline,
