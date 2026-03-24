@@ -3,7 +3,7 @@
 # =========================
 import unsloth
 from unsloth import FastLanguageModel
-
+import torch
 import os
 import faiss
 import pandas as pd
