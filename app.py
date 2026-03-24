@@ -3,8 +3,12 @@
 # =========================
 import unsloth
 from unsloth import FastLanguageModel
+
 import torch
 torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
+
 import os
 import faiss
 import pandas as pd
@@ -16,15 +20,16 @@ from transformers import pipeline
 import gradio as gr
 
 # =========================
+# Device
+# =========================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# =========================
 # Configuration
 # =========================
-# FIX 1: use 4-bit quantized version — loads on T4 GPU
 BASE_MODEL = "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-
-# FIX 2: load adapter from your HF model repo
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
 HF_TOKEN   = None
-#HF_TOKEN   = os.environ.get("HF_TOKEN")   # set in Space secrets
 
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
@@ -77,21 +82,26 @@ else:
 
 # =========================
 # Load base model + LoRA
-# use PeftModel.from_pretrained to load from HF Hub
 # =========================
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name     = BASE_MODEL,
     load_in_4bit   = True,
     max_seq_length = 2048,
 )
+
+
 tokenizer.pad_token = tokenizer.eos_token
-# Load your LoRA adapter from HF model repo
+
+# Load LoRA
 model = PeftModel.from_pretrained(
     model,
     LORA_REPO,
     token = HF_TOKEN
 )
-FastLanguageModel.for_inference(model)
+
+# 🔥 CRITICAL FIXES
+model.eval()
+model.config.use_cache = False
 
 print("✓ Model + LoRA adapter loaded successfully")
 
@@ -116,15 +126,18 @@ def extract_skills(resume_text: str) -> str:
         "Return ONLY a comma-separated list. Do not add explanations.\n\n"
         f"{resume_text[:3000]}"
     )
-    inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+
+    inputs = tokenizer([prompt], return_tensors="pt").to(device)
+
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens = 200,
             temperature    = 0.1,
             do_sample      = False,
-            use_cache      = True,
+            use_cache      = False,  
         )
+
     generated = outputs[0][inputs["input_ids"].shape[1]:]
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
@@ -155,21 +168,25 @@ def recommend_jobs(candidate_skills: str, jobs: list) -> str:
         "Based on the following job matches, summarize each role and "
         "recommend additional job titles requiring similar skills:\n\n"
     )
+
     for job in jobs:
         prompt += (
             f"Title: {job['title']}\n"
             f"Description: {job['description']}\n"
             f"Skills: {job['skills']}\n\n"
         )
-    inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+
+    inputs = tokenizer([prompt], return_tensors="pt").to(device)
+
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens = 400,
             temperature    = 0.4,
             do_sample      = False,
-            use_cache      = True,
+            use_cache      = False,  
         )
+
     generated = outputs[0][inputs["input_ids"].shape[1]:]
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
@@ -180,6 +197,7 @@ def run_pipeline(resume_text: str):
     skills          = extract_skills(resume_text)
     jobs            = retrieve_jobs(skills)
     recommendations = recommend_jobs(skills, jobs)
+
     return {
         "extracted_skills": skills,
         "top_jobs":         jobs,
@@ -187,7 +205,7 @@ def run_pipeline(resume_text: str):
     }
 
 # =========================
-# Gradio UI — unchanged from original
+# Gradio UI
 # =========================
 def gradio_pipeline(resume_text):
     try:
@@ -200,7 +218,7 @@ def gradio_pipeline(resume_text):
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
-        print(error_msg)  # shows in Space logs
+        print(error_msg)
         return str(e), [], str(e)
 
 demo = gr.Interface(
