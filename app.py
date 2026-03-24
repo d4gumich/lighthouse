@@ -1,21 +1,14 @@
 # =========================
-# Imports (Unsloth MUST be first)
+# Imports
 # =========================
-import unsloth
-from unsloth import FastLanguageModel
-
-import torch
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)
-
 import os
+import torch
 import faiss
 import pandas as pd
 
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
 import gradio as gr
 
 # =========================
@@ -25,23 +18,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 # =========================
+# HF Token (IMPORTANT)
+# =========================
+HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
+
+# =========================
 # Configuration
 # =========================
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-
-tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-tokenizer.pad_token = tokenizer.eos_token
-
-model = AutoModelForCausalLM.from_pretrained(
-    BASE_MODEL,
-    torch_dtype=torch.float16,
-    device_map="auto"
-)
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
-model = PeftModel.from_pretrained(model, LORA_REPO)
+
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
@@ -54,10 +40,10 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# FAST embedding model (CPU)
+# Embedding model (FAST)
 # =========================
 embedder = SentenceTransformer(
-    "BAAI/bge-base-en-v1.5",   # ✅ faster than large
+    "BAAI/bge-base-en-v1.5",
     device="cpu"
 )
 
@@ -76,8 +62,10 @@ job_texts = (
 ).tolist()
 
 if os.path.exists(FAISS_PATH):
+    print("Loading FAISS index...")
     index = faiss.read_index(FAISS_PATH)
 else:
+    print("Building FAISS index...")
     embeddings = embedder.encode(job_texts, convert_to_numpy=True)
     faiss.normalize_L2(embeddings)
     index = faiss.IndexFlatIP(embeddings.shape[1])
@@ -85,26 +73,31 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Load model + LoRA
+# Load Model + LoRA (STABLE)
 # =========================
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name     = BASE_MODEL,
-    load_in_4bit   = True,
-    max_seq_length = 2048,
-)
+print("Loading model...")
 
+tokenizer = AutoTokenizer.from_pretrained(
+    BASE_MODEL,
+    token=HF_TOKEN
+)
 tokenizer.pad_token = tokenizer.eos_token
+
+model = AutoModelForCausalLM.from_pretrained(
+    BASE_MODEL,
+    torch_dtype=torch.float16,
+    device_map="auto",
+    token=HF_TOKEN
+)
 
 model = PeftModel.from_pretrained(model, LORA_REPO)
 
-model.to(device)                    # ✅ FORCE GPU
 model.eval()
-model.config.use_cache = False
 
-print("Model running on:", next(model.parameters()).device)
+print("Model loaded on:", next(model.parameters()).device)
 
 # =========================
-# Pipeline (faster + stable)
+# Pipeline
 # =========================
 llm = pipeline(
     "text-generation",
@@ -134,7 +127,7 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# SINGLE PASS LLM (FAST)
+# Single-pass LLM
 # =========================
 def generate_output(resume_text, jobs):
 
@@ -162,7 +155,6 @@ Recommendations: <text>
 
     response = llm(prompt)[0]["generated_text"]
 
-    # simple parsing
     skills = ""
     recommendations = response
 
@@ -212,6 +204,7 @@ demo = gr.Interface(
         gr.Textbox(label="Recommendations"),
     ],
     title="⚡ Fast Resume Job Recommender",
+    description="GPU-powered skill extraction + job recommendation"
 )
 
 demo.launch()
