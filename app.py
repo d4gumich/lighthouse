@@ -149,7 +149,7 @@ def retrieve_jobs(candidate_skills: str, k: int = TOP_K):
 # Recommendation generation
 # =========================
 def recommend_jobs(candidate_skills: str, jobs: list) -> str:
-  prompt = f"Candidate skills: {candidate_skills}\n\n"
+    prompt = f"Candidate skills: {candidate_skills}\n\n"
     prompt += (
         "Based on the following job matches, summarize each role and "
         "recommend additional job titles requiring similar skills:\n\n"
