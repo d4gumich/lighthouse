@@ -12,7 +12,6 @@ torch.backends.cuda.enable_math_sdp(True)
 import os
 import faiss
 import pandas as pd
-import numpy as np
 
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
@@ -23,13 +22,13 @@ import gradio as gr
 # Device
 # =========================
 device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", device)
 
 # =========================
 # Configuration
 # =========================
 BASE_MODEL = "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
-HF_TOKEN   = None
 
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
@@ -43,10 +42,10 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Load embedding model (CPU)
+# FAST embedding model (CPU)
 # =========================
 embedder = SentenceTransformer(
-    "BAAI/bge-large-en-v1.5",
+    "BAAI/bge-base-en-v1.5",   # ✅ faster than large
     device="cpu"
 )
 
@@ -65,23 +64,16 @@ job_texts = (
 ).tolist()
 
 if os.path.exists(FAISS_PATH):
-    print("Loading FAISS index...")
     index = faiss.read_index(FAISS_PATH)
 else:
-    print("Building FAISS index...")
-    embeddings = embedder.encode(
-        job_texts,
-        convert_to_numpy=True,
-        show_progress_bar=True
-    )
+    embeddings = embedder.encode(job_texts, convert_to_numpy=True)
     faiss.normalize_L2(embeddings)
-    dim = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dim)
+    index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Load base model + LoRA
+# Load model + LoRA
 # =========================
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name     = BASE_MODEL,
@@ -89,119 +81,98 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     max_seq_length = 2048,
 )
 
-
 tokenizer.pad_token = tokenizer.eos_token
 
-# Load LoRA
-model = PeftModel.from_pretrained(
-    model,
-    LORA_REPO,
-    token = HF_TOKEN
-)
+model = PeftModel.from_pretrained(model, LORA_REPO)
 
-# 🔥 CRITICAL FIXES
+model.to(device)                    # ✅ FORCE GPU
 model.eval()
 model.config.use_cache = False
 
-print("✓ Model + LoRA adapter loaded successfully")
+print("Model running on:", next(model.parameters()).device)
 
 # =========================
-# Text generation pipeline
+# Pipeline (faster + stable)
 # =========================
 llm = pipeline(
     "text-generation",
-    model          = model,
-    tokenizer      = tokenizer,
-    max_new_tokens = 400,
-    temperature    = 0.4,
-    do_sample      = False,
+    model=model,
+    tokenizer=tokenizer,
+    device=0 if device == "cuda" else -1,
+    max_new_tokens=200,
+    temperature=0.3,
+    do_sample=False,
 )
 
 # =========================
-# Skill extraction
+# Retrieval
 # =========================
-def extract_skills(resume_text: str) -> str:
-    prompt = (
-        "Extract ONLY the skills explicitly mentioned in the resume. "
-        "Return ONLY a comma-separated list. Do not add explanations.\n\n"
-        f"{resume_text[:3000]}"
-    )
-
-    inputs = tokenizer([prompt], return_tensors="pt").to(device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens = 200,
-            temperature    = 0.1,
-            do_sample      = False,
-            use_cache      = False,  
-        )
-
-    generated = outputs[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
-
-# =========================
-# RAG retrieval
-# =========================
-def retrieve_jobs(candidate_skills: str, k: int = TOP_K):
-    query_emb = embedder.encode([candidate_skills], convert_to_numpy=True)
+def retrieve_jobs(text, k=TOP_K):
+    query_emb = embedder.encode([text], convert_to_numpy=True)
     faiss.normalize_L2(query_emb)
     scores, indices = index.search(query_emb, k)
 
     results = []
     for idx, score in zip(indices[0], scores[0]):
         results.append({
-            "title":       df.iloc[idx]["title"],
-            "description": df.iloc[idx]["description"],
-            "skills":      df.iloc[idx]["skill_names"],
-            "score":       float(score),
+            "title": df.iloc[idx]["title"],
+            "skills": df.iloc[idx]["skill_names"],
+            "score": float(score),
         })
     return results
 
 # =========================
-# Recommendation generation
+# SINGLE PASS LLM (FAST)
 # =========================
-def recommend_jobs(candidate_skills: str, jobs: list) -> str:
-    prompt = f"Candidate skills: {candidate_skills}\n\n"
-    prompt += (
-        "Based on the following job matches, summarize each role and "
-        "recommend additional job titles requiring similar skills:\n\n"
-    )
+def generate_output(resume_text, jobs):
 
+    job_context = ""
     for job in jobs:
-        prompt += (
-            f"Title: {job['title']}\n"
-            f"Description: {job['description']}\n"
-            f"Skills: {job['skills']}\n\n"
-        )
+        job_context += f"{job['title']} (Skills: {job['skills']})\n"
 
-    inputs = tokenizer([prompt], return_tensors="pt").to(device)
+    prompt = f"""
+You are a career assistant.
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens = 400,
-            temperature    = 0.4,
-            do_sample      = False,
-            use_cache      = False,  
-        )
+1. Extract skills from the resume.
+2. Match with jobs.
+3. Recommend additional roles.
 
-    generated = outputs[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True).strip()
+Resume:
+{resume_text[:2000]}
+
+Jobs:
+{job_context}
+
+Output format:
+Skills: <comma-separated>
+Recommendations: <text>
+"""
+
+    response = llm(prompt)[0]["generated_text"]
+
+    # simple parsing
+    skills = ""
+    recommendations = response
+
+    if "Skills:" in response:
+        skills = response.split("Skills:")[-1].split("Recommendations:")[0].strip()
+
+    if "Recommendations:" in response:
+        recommendations = response.split("Recommendations:")[-1].strip()
+
+    return skills, recommendations
 
 # =========================
-# End-to-end pipeline
+# Pipeline
 # =========================
-def run_pipeline(resume_text: str):
-    skills          = extract_skills(resume_text)
-    jobs            = retrieve_jobs(skills)
-    recommendations = recommend_jobs(skills, jobs)
+def run_pipeline(resume_text):
+    jobs = retrieve_jobs(resume_text)
+    skills, recommendations = generate_output(resume_text, jobs)
 
     return {
         "extracted_skills": skills,
-        "top_jobs":         jobs,
-        "recommendations":  recommendations,
+        "top_jobs": jobs,
+        "recommendations": recommendations,
     }
 
 # =========================
@@ -211,26 +182,24 @@ def gradio_pipeline(resume_text):
     try:
         result = run_pipeline(resume_text)
         return (
-            result['extracted_skills'],
-            result['top_jobs'],
-            result['recommendations']
+            result["extracted_skills"],
+            result["top_jobs"],
+            result["recommendations"],
         )
     except Exception as e:
         import traceback
-        error_msg = traceback.format_exc()
-        print(error_msg)
+        print(traceback.format_exc())
         return str(e), [], str(e)
 
 demo = gr.Interface(
-    fn          = gradio_pipeline,
-    inputs      = gr.Textbox(lines=10, placeholder="Paste resume text here"),
-    outputs     = [
+    fn=gradio_pipeline,
+    inputs=gr.Textbox(lines=10, placeholder="Paste resume text here"),
+    outputs=[
         gr.Textbox(label="Extracted Skills"),
         gr.JSON(label="Top Jobs"),
-        gr.Textbox(label="Recommendations")
+        gr.Textbox(label="Recommendations"),
     ],
-    title       = "Resume Job Recommendation",
-    description = "Extract skills from a resume and recommend jobs using FAISS + LLM"
+    title="⚡ Fast Resume Job Recommender",
 )
 
 demo.launch()
