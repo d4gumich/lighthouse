@@ -27,9 +27,21 @@ print("Using device:", device)
 # =========================
 # Configuration
 # =========================
-BASE_MODEL = "unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit"
-LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
+BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+tokenizer.pad_token = tokenizer.eos_token
+
+model = AutoModelForCausalLM.from_pretrained(
+    BASE_MODEL,
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
+model = PeftModel.from_pretrained(model, LORA_REPO)
 DATA_PATH  = "job_skill_results.csv"
 FAISS_DIR  = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
