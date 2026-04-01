@@ -149,6 +149,9 @@ def generate_output(resume_text, jobs):
 
     prompt = f"""
 You are a career assistant.
+1. Extract skills from the resume.
+2. Match with jobs.
+3. Recommend additional roles.
 
 STRICT INSTRUCTIONS:
 - You MUST follow the exact output format.
@@ -161,36 +164,34 @@ Resume:
 Jobs:
 {job_context}
 
-OUTPUT FORMAT (exactly):
-Skills: skill1, skill2, skill3
-Recommendations: your recommendations here
+Output format:
+Skills: <comma-separated>
+Recommendations: <text>
 """
-# =========================
-# Rsponse List
-# =========================
-import re
 
-response = llm(prompt)[0]["generated_text"]
+    # === Call LLM ===
+    response = llm(prompt)[0]["generated_text"]
 
-# Remove prompt if model echoes it
-response = response.replace(prompt, "").strip()
+    # Remove prompt if model echoes it
+    response = response.replace(prompt, "").strip()
 
-print("RAW RESPONSE:\n", response)  # Debug once
+    print("RAW RESPONSE:\n", response)  # debug once
 
-skills = ""
-recommendations = response
+    skills = ""
+    recommendations = response
 
-# Flexible regex extraction
-skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
-rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
+    # === Robust regex extraction ===
+    import re
+    skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
+    rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
 
-if skills_match:
-    skills = skills_match.group(1).strip()
+    if skills_match:
+        skills = skills_match.group(1).strip()
 
-if rec_match:
-    recommendations = rec_match.group(1).strip()
+    if rec_match:
+        recommendations = rec_match.group(1).strip()
 
-return skills, recommendations
+    return skills, recommendations
 
 # =========================
 # Full Pipeline
