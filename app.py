@@ -5,12 +5,12 @@ import os
 import torch
 import faiss
 import pandas as pd
+import re
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
-import re
 
 # =========================
 # Device
@@ -27,12 +27,12 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 # Configuration
 # =========================
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
+LORA_REPO = "Data4GoodCenter/careermatch-llama3-8b-lora"
 
-DATA_PATH  = "job_skill_results.csv"
-FAISS_DIR  = "data"
+DATA_PATH = "job_skill_results.csv"
+FAISS_DIR = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
-TOP_K      = 3
+TOP_K = 3
 
 # =========================
 # Prepare directories
@@ -41,7 +41,7 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Embedding model (lighter option recommended)
+# Embedding model
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
@@ -74,7 +74,7 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# 4-bit Quantization Config (🔥 KEY CHANGE)
+# 4-bit Quantization Config
 # =========================
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -87,11 +87,7 @@ bnb_config = BitsAndBytesConfig(
 # Load Model + LoRA
 # =========================
 print("Loading model with 4-bit quantization...")
-
-tokenizer = AutoTokenizer.from_pretrained(
-    BASE_MODEL,
-    token=HF_TOKEN
-)
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, token=HF_TOKEN)
 tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
@@ -138,7 +134,7 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM Generation (Fixed)
+# LLM Generation
 # =========================
 def generate_output(resume_text, jobs):
     job_context = ""
@@ -163,20 +159,19 @@ Skills: <comma-separated>
 Recommendations: <text>
 """
 
-    # === Call LLM ===
     response = llm(prompt)[0]["generated_text"]
 
-    # Remove prompt if model echoes it
+    # Remove prompt if echoed
     response_clean = response.replace(prompt, "").strip()
+    print("RAW RESPONSE:\n", response_clean)  # debug
 
-    # === Robust regex extraction ===
+    # Robust regex extraction
     skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response_clean, re.IGNORECASE | re.DOTALL)
-    rec_match    = re.search(r"Recommendations\s*[:\-]\s*(.*)", response_clean, re.IGNORECASE | re.DOTALL)
+    rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response_clean, re.IGNORECASE | re.DOTALL)
 
     skills = skills_match.group(1).strip() if skills_match else ""
     recommendations = rec_match.group(1).strip() if rec_match else ""
 
-    # ✅ Return extracted values
     return skills, recommendations
 
 # =========================
@@ -185,7 +180,6 @@ Recommendations: <text>
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
     skills, recommendations = generate_output(resume_text, jobs)
-
     return {
         "extracted_skills": skills,
         "top_jobs": jobs,
