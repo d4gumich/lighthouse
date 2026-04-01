@@ -10,6 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndB
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
+import re
 
 # =========================
 # Device
@@ -103,9 +104,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 # Attach LoRA
 model = PeftModel.from_pretrained(model, LORA_REPO)
-
 model.eval()
-
 print("Model loaded on:", next(model.parameters()).device)
 
 # =========================
@@ -139,10 +138,9 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM Generation
+# LLM Generation (Fixed)
 # =========================
 def generate_output(resume_text, jobs):
-
     job_context = ""
     for job in jobs:
         job_context += f"{job['title']} (Skills: {job['skills']})\n"
@@ -152,18 +150,14 @@ You are a career assistant.
 1. Extract skills from the resume.
 2. Match with jobs.
 3. Recommend additional roles.
-
 STRICT INSTRUCTIONS:
 - You MUST follow the exact output format.
 - Do NOT change labels.
 - Do NOT add extra text.
-
 Resume:
 {resume_text[:2000]}
-
 Jobs:
 {job_context}
-
 Output format:
 Skills: <comma-separated>
 Recommendations: <text>
@@ -173,39 +167,18 @@ Recommendations: <text>
     response = llm(prompt)[0]["generated_text"]
 
     # Remove prompt if model echoes it
-    response = response.replace(prompt, "").strip()
-
-    print("RAW RESPONSE:\n", response)  # debug once
-
-    skills = ""
-    recommendations = response
-
-    # === Robust regex extraction ===
-   """"" import re
-    skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
-    rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
-
-    if skills_match:
-        skills = skills_match.group(1).strip()
-
-    if rec_match:
-        recommendations = rec_match.group(1).strip()
-
-    return skills, recommendations
-    """
-    import re
-
-    # Clean up model response
     response_clean = response.replace(prompt, "").strip()
 
-    # Extract Skills and Recommendations robustly
+    # === Robust regex extraction ===
     skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response_clean, re.IGNORECASE | re.DOTALL)
     rec_match    = re.search(r"Recommendations\s*[:\-]\s*(.*)", response_clean, re.IGNORECASE | re.DOTALL)
 
     skills = skills_match.group(1).strip() if skills_match else ""
     recommendations = rec_match.group(1).strip() if rec_match else ""
-    # ✅ Return the extracted values
+
+    # ✅ Return extracted values
     return skills, recommendations
+
 # =========================
 # Full Pipeline
 # =========================
