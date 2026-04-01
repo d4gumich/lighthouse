@@ -5,7 +5,8 @@ import os
 import torch
 import faiss
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
@@ -17,9 +18,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 # =========================
-# HF Token (IMPORTANT)
+# HF Token
 # =========================
-HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # =========================
 # Configuration
@@ -39,26 +40,27 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Embedding model
+# Embedding model (lighter option recommended)
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
-    device="cpu"  # embeddings can stay on CPU
+    device="cpu"
 )
 
 # =========================
 # Load job data
 # =========================
 df = pd.read_csv(DATA_PATH)
+
+# =========================
+# Build / Load FAISS index
+# =========================
 job_texts = (
     df["title"].fillna("") + " " +
     df["description"].fillna("") + " " +
     df["skill_names"].fillna("")
 ).tolist()
 
-# =========================
-# Build / Load FAISS index
-# =========================
 if os.path.exists(FAISS_PATH):
     print("Loading FAISS index...")
     index = faiss.read_index(FAISS_PATH)
@@ -71,41 +73,43 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Quantization config for 4-bit
+# 4-bit Quantization Config (KEY CHANGE)
 # =========================
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
     bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16
+    bnb_4bit_quant_type="nf4"
 )
 
 # =========================
 # Load Model + LoRA
 # =========================
-print("Loading model...")
+print("Loading model with 4-bit quantization...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
-    use_auth_token=HF_TOKEN
+    token=HF_TOKEN
 )
 tokenizer.pad_token = tokenizer.eos_token
 
-# Load quantized base model
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    quantization_config=bnb_config,
     device_map="auto",
-    use_auth_token=HF_TOKEN
+    quantization_config=bnb_config,
+    dtype=torch.float16,
+    token=HF_TOKEN
 )
 
-# Load LoRA adapter
+# Attach LoRA
 model = PeftModel.from_pretrained(model, LORA_REPO)
+
 model.eval()
+
 print("Model loaded on:", next(model.parameters()).device)
 
 # =========================
-# LLM pipeline
+# Pipeline
 # =========================
 llm = pipeline(
     "text-generation",
@@ -135,9 +139,10 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# Skills extraction & recommendation
+# LLM Generation
 # =========================
 def generate_output(resume_text, jobs):
+
     job_context = ""
     for job in jobs:
         job_context += f"{job['title']} (Skills: {job['skills']})\n"
@@ -147,6 +152,11 @@ You are a career assistant.
 1. Extract skills from the resume.
 2. Match with jobs.
 3. Recommend additional roles.
+
+STRICT INSTRUCTIONS:
+- You MUST follow the exact output format.
+- Do NOT change labels.
+- Do NOT add extra text.
 
 Resume:
 {resume_text[:2000]}
@@ -159,25 +169,36 @@ Skills: <comma-separated>
 Recommendations: <text>
 """
 
+    # === Call LLM ===
     response = llm(prompt)[0]["generated_text"]
 
-    # Parse response reliably
+    # Remove prompt if model echoes it
+    response = response.replace(prompt, "").strip()
+
+    print("RAW RESPONSE:\n", response)  # debug once
+
     skills = ""
-    recommendations = ""
-    if "Skills:" in response and "Recommendations:" in response:
-        skills = response.split("Skills:")[-1].split("Recommendations:")[0].strip()
-        recommendations = response.split("Recommendations:")[-1].strip()
-    else:
-        recommendations = response.strip()
+    recommendations = response
+
+    # === Robust regex extraction ===
+    import re
+    skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
+    rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
+
+    if skills_match:
+        skills = skills_match.group(1).strip()
+
+    if rec_match:
+        recommendations = rec_match.group(1).strip()
 
     return skills, recommendations
-
 # =========================
-# Full pipeline
+# Full Pipeline
 # =========================
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
     skills, recommendations = generate_output(resume_text, jobs)
+
     return {
         "extracted_skills": skills,
         "top_jobs": jobs,
@@ -185,7 +206,7 @@ def run_pipeline(resume_text):
     }
 
 # =========================
-# Gradio interface
+# Gradio UI
 # =========================
 def gradio_pipeline(resume_text):
     try:
