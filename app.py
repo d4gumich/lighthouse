@@ -12,7 +12,7 @@ from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 
 # =========================
-# Fix CPU thread explosion
+# Fix threads (IMPORTANT)
 # =========================
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -24,22 +24,25 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 # =========================
-# HF Token
+# Config
 # =========================
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# =========================
-# Configuration
-# =========================
-BASE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"   # lighter than 3.1
-LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
+# Use PRE-QUANTIZED model (CRITICAL FIX)
+BASE_MODEL = "unsloth/llama-3-8b-bnb-4bit"
 
-DATA_PATH  = "job_skill_results.csv"
-FAISS_PATH = "data/faiss.index"
-TOP_K      = 3
+# Your LoRA (kept same)
+LORA_REPO = "Data4GoodCenter/careermatch-llama3-8b-lora"
+
+DATA_PATH = "job_skill_results.csv"
+FAISS_DIR = "data"
+FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
+TOP_K = 3
+
+os.makedirs(FAISS_DIR, exist_ok=True)
 
 # =========================
-# Load lightweight embedder
+# Embedding model (small)
 # =========================
 embedder = SentenceTransformer(
     "sentence-transformers/all-MiniLM-L6-v2",
@@ -47,44 +50,57 @@ embedder = SentenceTransformer(
 )
 
 # =========================
-# Load job data
+# Load data
 # =========================
 df = pd.read_csv(DATA_PATH)
 
-# =========================
-# Load FAISS (DO NOT BUILD)
-# =========================
-assert os.path.exists(FAISS_PATH), "FAISS index missing!"
-index = faiss.read_index(FAISS_PATH)
+job_texts = (
+    df["title"].fillna("") + " " +
+    df["description"].fillna("") + " " +
+    df["skill_names"].fillna("")
+).tolist()
 
 # =========================
-# 4-bit Quantization
+# FAISS (SAFE BUILD)
 # =========================
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4"
-)
+if os.path.exists(FAISS_PATH):
+    print("Loading FAISS index...")
+    index = faiss.read_index(FAISS_PATH)
+else:
+    print("Building FAISS index (first run only)...")
+
+    # batch encode to avoid RAM spike
+    batch_size = 32
+    all_embeddings = []
+
+    for i in range(0, len(job_texts), batch_size):
+        batch = job_texts[i:i+batch_size]
+        emb = embedder.encode(batch, convert_to_numpy=True)
+        all_embeddings.append(emb)
+
+    embeddings = torch.cat([torch.tensor(x) for x in all_embeddings]).numpy()
+
+    faiss.normalize_L2(embeddings)
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index.add(embeddings)
+
+    faiss.write_index(index, FAISS_PATH)
+    print("FAISS index saved!")
 
 # =========================
-# Load Model
+# Load Model (QUANTIZED)
 # =========================
-print("Loading model...")
+print("Loading quantized model...")
 
-tokenizer = AutoTokenizer.from_pretrained(
-    BASE_MODEL,
-    token=HF_TOKEN
-)
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, token=HF_TOKEN)
 tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    quantization_config=bnb_config,
     device_map="auto",
     torch_dtype=torch.float16,
-    low_cpu_mem_usage=True,
-    token=HF_TOKEN
+    low_cpu_mem_usage=True
 )
 
 # Attach LoRA
@@ -93,7 +109,7 @@ model = PeftModel.from_pretrained(model, LORA_REPO)
 model.config.use_cache = False
 model.eval()
 
-print("Model loaded successfully!")
+print("Model loaded!")
 
 # =========================
 # Generation (NO pipeline)
@@ -142,23 +158,17 @@ def generate_output(resume_text, jobs):
     prompt = f"""
 You are a career assistant.
 
-1. Extract skills from the resume.
-2. Match with jobs.
-3. Recommend additional roles.
+Extract skills and recommend jobs.
 
-STRICT RULES:
-- Follow exact format
-- No extra text
+STRICT FORMAT:
+Skills: <comma-separated>
+Recommendations: <text>
 
 Resume:
 {resume_text[:1500]}
 
 Jobs:
 {job_context}
-
-Output:
-Skills: <comma-separated>
-Recommendations: <text>
 """
 
     response = generate_text(prompt)
@@ -186,7 +196,6 @@ Recommendations: <text>
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
     skills, recommendations = generate_output(resume_text, jobs)
-
     return skills, jobs, recommendations
 
 # =========================
@@ -208,8 +217,7 @@ demo = gr.Interface(
         gr.JSON(label="Top Jobs"),
         gr.Textbox(label="Recommendations"),
     ],
-    title="Fast Resume Job Recommender",
-    description="Optimized for HF Spaces (4-bit LLaMA + LoRA)"
+    title="Resume Job Recommender",
 )
 
 demo.launch()
