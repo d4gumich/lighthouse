@@ -5,9 +5,6 @@ import os
 import torch
 import faiss
 import pandas as pd
-import json
-import re
-
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
@@ -27,7 +24,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
 # =========================
 # Configuration
 # =========================
-BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # your 4-bit quantized model
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
 
 DATA_PATH  = "job_skill_results.csv"
@@ -42,11 +39,11 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Embedding model (FAST)
+# Embedding model
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
-    device="cpu"  # embedding on CPU is fine
+    device="cpu"
 )
 
 # =========================
@@ -75,9 +72,9 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Load Model + LoRA with 4-bit quantization
+# Load 4-bit Quantized Model + LoRA
 # =========================
-print("Loading model...")
+print("Loading 4-bit quantized model...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
@@ -87,10 +84,12 @@ tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    device_map="auto",
-    load_in_4bit=True,       # <-- 4-bit quantization
-    torch_dtype=torch.float16,
-    use_auth_token=HF_TOKEN,
+    device_map="auto" if torch.cuda.is_available() else None,
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16,
+    use_auth_token=HF_TOKEN
 )
 
 model = PeftModel.from_pretrained(model, LORA_REPO)
@@ -129,53 +128,44 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM JSON-based Output
+# LLM Output Parsing
 # =========================
 def generate_output(resume_text, jobs):
-
     job_context = ""
     for job in jobs:
         job_context += f"{job['title']} (Skills: {job['skills']})\n"
 
     prompt = f"""
 You are a career assistant.
-Extract skills from the resume, match with jobs, and recommend additional roles.
-
-Return output in strict JSON format exactly like this:
-
-{{
-    "skills": ["skill1", "skill2"],
-    "recommendations": "your text here"
-}}
+1. Extract skills from the resume.
+2. Match with jobs.
+3. Recommend additional roles.
 
 Resume:
 {resume_text[:2000]}
 
 Jobs:
 {job_context}
+
+Output format:
+Skills: <comma-separated>
+Recommendations: <text>
 """
 
-    response_text = llm(prompt)[0]["generated_text"]
-    response_text = response_text.replace(prompt, "").strip()
-    print("RAW RESPONSE:\n", response_text)  # debug
+    response = llm(prompt)[0]["generated_text"]
 
-    # Parse JSON output
-    try:
-        parsed = json.loads(response_text)
-        skills = ", ".join(parsed.get("skills", []))
-        recommendations = parsed.get("recommendations", "")
-    except Exception as e:
-        print("JSON parse failed:", e)
-        # Fallback if JSON fails
-        skills = ""
-        recommendations = response_text
+    skills = ""
+    recommendations = ""
 
-    # Optional fallback: use job skills if skills empty
-    if not skills:
-        all_job_skills = []
-        for job in jobs:
-            all_job_skills.extend([s.strip() for s in job['skills'].split(',')])
-        skills = ", ".join(sorted(set(all_job_skills)))
+    if "Skills:" in response:
+        parts = response.split("Skills:")[-1]
+        if "Recommendations:" in parts:
+            skills = parts.split("Recommendations:")[0].strip()
+            recommendations = parts.split("Recommendations:")[1].strip()
+        else:
+            skills = parts.strip()
+    elif "Recommendations:" in response:
+        recommendations = response.split("Recommendations:")[1].strip()
 
     return skills, recommendations
 
