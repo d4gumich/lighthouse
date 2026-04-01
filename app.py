@@ -5,8 +5,10 @@ import os
 import torch
 import faiss
 import pandas as pd
+import json
+import re
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
@@ -18,9 +20,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 # =========================
-# HF Token
+# HF Token (IMPORTANT)
 # =========================
-HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
 
 # =========================
 # Configuration
@@ -40,11 +42,11 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Embedding model (lighter option recommended)
+# Embedding model (FAST)
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
-    device="cpu"
+    device="cpu"  # embedding on CPU is fine
 )
 
 # =========================
@@ -73,37 +75,25 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# 4-bit Quantization Config (🔥 KEY CHANGE)
+# Load Model + LoRA with 4-bit quantization
 # =========================
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4"
-)
-
-# =========================
-# Load Model + LoRA
-# =========================
-print("Loading model with 4-bit quantization...")
+print("Loading model...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
-    token=HF_TOKEN
+    use_auth_token=HF_TOKEN
 )
 tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
     device_map="auto",
-    quantization_config=bnb_config,
-    dtype=torch.float16,
-    token=HF_TOKEN
+    load_in_4bit=True,       # <-- 4-bit quantization
+    torch_dtype=torch.float16,
+    use_auth_token=HF_TOKEN,
 )
 
-# Attach LoRA
 model = PeftModel.from_pretrained(model, LORA_REPO)
-
 model.eval()
 
 print("Model loaded on:", next(model.parameters()).device)
@@ -139,7 +129,7 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM Generation
+# LLM JSON-based Output
 # =========================
 def generate_output(resume_text, jobs):
 
@@ -149,57 +139,52 @@ def generate_output(resume_text, jobs):
 
     prompt = f"""
 You are a career assistant.
-1. Extract skills from the resume.
-2. Match with jobs.
-3. Recommend additional roles.
+Extract skills from the resume, match with jobs, and recommend additional roles.
 
-STRICT INSTRUCTIONS:
-- You MUST follow the exact output format.
-- Do NOT change labels.
-- Do NOT add extra text.
+Return output in strict JSON format exactly like this:
+
+{{
+    "skills": ["skill1", "skill2"],
+    "recommendations": "your text here"
+}}
 
 Resume:
 {resume_text[:2000]}
 
 Jobs:
 {job_context}
-
-Output format:
-Skills: <comma-separated>
-Recommendations: <text>
 """
 
-    # === Call LLM ===
-    response = llm(prompt)[0]["generated_text"]
+    response_text = llm(prompt)[0]["generated_text"]
+    response_text = response_text.replace(prompt, "").strip()
+    print("RAW RESPONSE:\n", response_text)  # debug
 
-    # Remove prompt if model echoes it
-    response = response.replace(prompt, "").strip()
+    # Parse JSON output
+    try:
+        parsed = json.loads(response_text)
+        skills = ", ".join(parsed.get("skills", []))
+        recommendations = parsed.get("recommendations", "")
+    except Exception as e:
+        print("JSON parse failed:", e)
+        # Fallback if JSON fails
+        skills = ""
+        recommendations = response_text
 
-    print("RAW RESPONSE:\n", response)  # debug once
-
-    skills = ""
-    recommendations = response
-
-    # === Robust regex extraction ===
-    import re
-    skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
-    rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
-
-    if skills_match:
-        skills = skills_match.group(1).strip()
-
-    if rec_match:
-        recommendations = rec_match.group(1).strip()
+    # Optional fallback: use job skills if skills empty
+    if not skills:
+        all_job_skills = []
+        for job in jobs:
+            all_job_skills.extend([s.strip() for s in job['skills'].split(',')])
+        skills = ", ".join(sorted(set(all_job_skills)))
 
     return skills, recommendations
 
 # =========================
-# Full Pipeline
+# Pipeline
 # =========================
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
     skills, recommendations = generate_output(resume_text, jobs)
-
     return {
         "extracted_skills": skills,
         "top_jobs": jobs,
