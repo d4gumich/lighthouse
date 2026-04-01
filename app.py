@@ -5,7 +5,7 @@ import os
 import torch
 import faiss
 import pandas as pd
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
@@ -24,7 +24,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
 # =========================
 # Configuration
 # =========================
-BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # your 4-bit quantized model
+BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
 
 DATA_PATH  = "job_skill_results.csv"
@@ -43,23 +43,22 @@ assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
-    device="cpu"
+    device="cpu"  # embeddings can stay on CPU
 )
 
 # =========================
 # Load job data
 # =========================
 df = pd.read_csv(DATA_PATH)
-
-# =========================
-# Build / Load FAISS index
-# =========================
 job_texts = (
     df["title"].fillna("") + " " +
     df["description"].fillna("") + " " +
     df["skill_names"].fillna("")
 ).tolist()
 
+# =========================
+# Build / Load FAISS index
+# =========================
 if os.path.exists(FAISS_PATH):
     print("Loading FAISS index...")
     index = faiss.read_index(FAISS_PATH)
@@ -72,9 +71,19 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Load 4-bit Quantized Model + LoRA
+# Quantization config for 4-bit
 # =========================
-print("Loading 4-bit quantized model...")
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16
+)
+
+# =========================
+# Load Model + LoRA
+# =========================
+print("Loading model...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
@@ -82,23 +91,21 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 tokenizer.pad_token = tokenizer.eos_token
 
+# Load quantized base model
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    device_map="auto" if torch.cuda.is_available() else None,
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
+    quantization_config=bnb_config,
+    device_map="auto",
     use_auth_token=HF_TOKEN
 )
 
+# Load LoRA adapter
 model = PeftModel.from_pretrained(model, LORA_REPO)
 model.eval()
-
 print("Model loaded on:", next(model.parameters()).device)
 
 # =========================
-# Pipeline
+# LLM pipeline
 # =========================
 llm = pipeline(
     "text-generation",
@@ -128,7 +135,7 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM Output Parsing
+# Skills extraction & recommendation
 # =========================
 def generate_output(resume_text, jobs):
     job_context = ""
@@ -154,23 +161,19 @@ Recommendations: <text>
 
     response = llm(prompt)[0]["generated_text"]
 
+    # Parse response reliably
     skills = ""
     recommendations = ""
-
-    if "Skills:" in response:
-        parts = response.split("Skills:")[-1]
-        if "Recommendations:" in parts:
-            skills = parts.split("Recommendations:")[0].strip()
-            recommendations = parts.split("Recommendations:")[1].strip()
-        else:
-            skills = parts.strip()
-    elif "Recommendations:" in response:
-        recommendations = response.split("Recommendations:")[1].strip()
+    if "Skills:" in response and "Recommendations:" in response:
+        skills = response.split("Skills:")[-1].split("Recommendations:")[0].strip()
+        recommendations = response.split("Recommendations:")[-1].strip()
+    else:
+        recommendations = response.strip()
 
     return skills, recommendations
 
 # =========================
-# Pipeline
+# Full pipeline
 # =========================
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
@@ -182,7 +185,7 @@ def run_pipeline(resume_text):
     }
 
 # =========================
-# Gradio UI
+# Gradio interface
 # =========================
 def gradio_pipeline(resume_text):
     try:
