@@ -1,15 +1,15 @@
-# ========================= 
+# =========================
 # Imports
 # =========================
 import os
 import torch
 import faiss
 import pandas as pd
-import gradio as gr
-import re
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
+import gradio as gr
 
 # =========================
 # Device
@@ -23,58 +23,57 @@ print("Using device:", device)
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # =========================
-# Config
+# Configuration
 # =========================
 BASE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 LORA_REPO  = "Data4GoodCenter/careermatch-llama3-8b-lora"
 
 DATA_PATH  = "job_skill_results.csv"
+FAISS_DIR  = "data"
+FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
 TOP_K      = 3
 
 # =========================
-# Load data
+# Prepare directories
 # =========================
+os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
-df = pd.read_csv(DATA_PATH)
-
-df['combined_text'] = df['title'].fillna('') + " " + df['skill_names'].fillna('')
-
-df = df[df['combined_text'].str.contains(
-    "data|ai|ml|engineer|scientist|nlp|machine learning",
-    case=False,
-    na=False
-)]
 
 # =========================
-# Embeddings (UNCHANGED)
+# Embedding model (lighter option recommended)
 # =========================
 embedder = SentenceTransformer(
-    "BAAI/bge-small-en-v1.5",
-    device=device
+    "BAAI/bge-base-en-v1.5",
+    device="cpu"
 )
 
 # =========================
-# FAISS (UNCHANGED)
+# Load job data
 # =========================
-job_texts = df['combined_text'].tolist()
-print(f"Encoding {len(job_texts)} job entries...")
-
-embeddings = embedder.encode(
-    job_texts,
-    convert_to_numpy=True,
-    batch_size=16,
-    show_progress_bar=True
-)
-
-faiss.normalize_L2(embeddings)
-
-index = faiss.IndexFlatIP(embeddings.shape[1])
-index.add(embeddings)
-
-print(f"FAISS index built with {index.ntotal} entries")
+df = pd.read_csv(DATA_PATH)
 
 # =========================
-# Quantization config
+# Build / Load FAISS index
+# =========================
+job_texts = (
+    df["title"].fillna("") + " " +
+    df["description"].fillna("") + " " +
+    df["skill_names"].fillna("")
+).tolist()
+
+if os.path.exists(FAISS_PATH):
+    print("Loading FAISS index...")
+    index = faiss.read_index(FAISS_PATH)
+else:
+    print("Building FAISS index...")
+    embeddings = embedder.encode(job_texts, convert_to_numpy=True)
+    faiss.normalize_L2(embeddings)
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index.add(embeddings)
+    faiss.write_index(index, FAISS_PATH)
+
+# =========================
+# 4-bit Quantization Config (🔥 KEY CHANGE)
 # =========================
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -84,60 +83,46 @@ bnb_config = BitsAndBytesConfig(
 )
 
 # =========================
-# Load Model + LoRA (FIXED)
+# Load Model + LoRA
 # =========================
-print("Loading LLaMA + LoRA...")
+print("Loading model with 4-bit quantization...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
     token=HF_TOKEN
 )
-
-# 🔴 important for llama
 tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "left"
 
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    quantization_config=bnb_config,
     device_map="auto",
-    torch_dtype=torch.float16,
+    quantization_config=bnb_config,
+    dtype=torch.float16,
     token=HF_TOKEN
 )
 
-# Attach LoRA safely
-model = PeftModel.from_pretrained(
-    model,
-    LORA_REPO,
-    torch_dtype=torch.float16
-)
+# Attach LoRA
+model = PeftModel.from_pretrained(model, LORA_REPO)
 
 model.eval()
 
-# =========================
-# 🔴 REPLACE pipeline with manual generate (more stable)
-# =========================
-def generate_text(prompt):
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        padding=True,
-        truncation=True
-    ).to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=200,
-            temperature=0.3,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id
-        )
-
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+print("Model loaded on:", next(model.parameters()).device)
 
 # =========================
-# Retrieval (UNCHANGED)
+# Pipeline
+# =========================
+llm = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    device=0 if device == "cuda" else -1,
+    max_new_tokens=200,
+    temperature=0.3,
+    do_sample=False,
+)
+
+# =========================
+# Retrieval
 # =========================
 def retrieve_jobs(text, k=TOP_K):
     query_emb = embedder.encode([text], convert_to_numpy=True)
@@ -154,34 +139,49 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# LLM generation
+# LLM Generation
 # =========================
 def generate_output(resume_text, jobs):
+
     job_context = ""
     for job in jobs:
         job_context += f"{job['title']} (Skills: {job['skills']})\n"
 
     prompt = f"""
 You are a career assistant.
+1. Extract skills from the resume.
+2. Match with jobs.
+3. Recommend additional roles.
 
-STRICT FORMAT:
-Skills: <comma-separated>
-Recommendations: <top 2 careers>
+STRICT INSTRUCTIONS:
+- You MUST follow the exact output format.
+- Do NOT change labels.
+- Do NOT add extra text.
 
 Resume:
 {resume_text[:2000]}
 
 Jobs:
 {job_context}
+
+Output format:
+Skills: <comma-separated>
+Recommendations: <text>
 """
 
-    response = generate_text(prompt)
+    # === Call LLM ===
+    response = llm(prompt)[0]["generated_text"]
+
+    # Remove prompt if model echoes it
     response = response.replace(prompt, "").strip()
 
-    # Extract
-    skills = ""
-    recommendations = ""
+    print("RAW RESPONSE:\n", response)  # debug once
 
+    skills = ""
+    recommendations = response
+
+    # === Robust regex extraction ===
+    import re
     skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
     rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
 
@@ -192,13 +192,11 @@ Jobs:
         recommendations = rec_match.group(1).strip()
 
     return skills, recommendations
-
 # =========================
-# Pipeline
+# Full Pipeline
 # =========================
 def run_pipeline(resume_text):
-    skills, _ = generate_output(resume_text, [])
-    jobs = retrieve_jobs(skills)
+    jobs = retrieve_jobs(resume_text)
     skills, recommendations = generate_output(resume_text, jobs)
 
     return {
@@ -208,7 +206,7 @@ def run_pipeline(resume_text):
     }
 
 # =========================
-# Gradio
+# Gradio UI
 # =========================
 def gradio_pipeline(resume_text):
     try:
@@ -229,10 +227,10 @@ demo = gr.Interface(
     outputs=[
         gr.Textbox(label="Extracted Skills"),
         gr.JSON(label="Top Jobs"),
-        gr.Textbox(label="Top 2 Career Recommendations"),
+        gr.Textbox(label="Recommendations"),
     ],
     title="Fast Resume Job Recommender",
-    description="Skill extraction + FAISS + LLaMA3 LoRA"
+    description="GPU-powered skill extraction + job recommendation"
 )
 
 demo.launch()
