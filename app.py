@@ -6,7 +6,7 @@ import torch
 import faiss
 import pandas as pd
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 from peft import PeftModel
 from sentence_transformers import SentenceTransformer
 import gradio as gr
@@ -18,9 +18,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
 # =========================
-# HF Token (IMPORTANT)
+# HF Token
 # =========================
-HF_TOKEN = os.environ.get("HF_TOKEN")  # set in HF Spaces secrets
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # =========================
 # Configuration
@@ -40,7 +40,7 @@ os.makedirs(FAISS_DIR, exist_ok=True)
 assert os.path.exists(DATA_PATH), f"CSV not found: {DATA_PATH}"
 
 # =========================
-# Embedding model (FAST)
+# Embedding model (lighter option recommended)
 # =========================
 embedder = SentenceTransformer(
     "BAAI/bge-base-en-v1.5",
@@ -73,9 +73,19 @@ else:
     faiss.write_index(index, FAISS_PATH)
 
 # =========================
-# Load Model + LoRA (STABLE)
+# 4-bit Quantization Config (🔥 KEY CHANGE)
 # =========================
-print("Loading model...")
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4"
+)
+
+# =========================
+# Load Model + LoRA
+# =========================
+print("Loading model with 4-bit quantization...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     BASE_MODEL,
@@ -85,11 +95,13 @@ tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,
-    torch_dtype=torch.float16,
     device_map="auto",
+    quantization_config=bnb_config,
+    dtype=torch.float16,
     token=HF_TOKEN
 )
 
+# Attach LoRA
 model = PeftModel.from_pretrained(model, LORA_REPO)
 
 model.eval()
@@ -127,7 +139,7 @@ def retrieve_jobs(text, k=TOP_K):
     return results
 
 # =========================
-# Single-pass LLM
+# LLM Generation
 # =========================
 def generate_output(resume_text, jobs):
 
@@ -137,7 +149,6 @@ def generate_output(resume_text, jobs):
 
     prompt = f"""
 You are a career assistant.
-
 1. Extract skills from the resume.
 2. Match with jobs.
 3. Recommend additional roles.
@@ -167,7 +178,7 @@ Recommendations: <text>
     return skills, recommendations
 
 # =========================
-# Pipeline
+# Full Pipeline
 # =========================
 def run_pipeline(resume_text):
     jobs = retrieve_jobs(resume_text)
