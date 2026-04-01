@@ -203,7 +203,7 @@ demo = gr.Interface(
         gr.JSON(label="Top Jobs"),
         gr.Textbox(label="Recommendations"),
     ],
-    title="⚡ Fast Resume Job Recommender",
+    title="Fast Resume Job Recommender",
     description="GPU-powered skill extraction + job recommendation"
 )
 
