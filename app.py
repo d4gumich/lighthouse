@@ -151,7 +151,7 @@ STRICT INSTRUCTIONS:
 - Do NOT change labels.
 - Do NOT add extra text.
 Resume:
-{resume_text[:2000]}
+{resume_text[:7000]}
 Jobs:
 {job_context}
 Output format:
