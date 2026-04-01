@@ -181,7 +181,7 @@ Recommendations: <text>
     recommendations = response
 
     # === Robust regex extraction ===
-    import re
+   """"" import re
     skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response, re.IGNORECASE)
     rec_match = re.search(r"Recommendations\s*[:\-]\s*(.*)", response, re.IGNORECASE)
 
@@ -191,6 +191,20 @@ Recommendations: <text>
     if rec_match:
         recommendations = rec_match.group(1).strip()
 
+    return skills, recommendations
+    """
+    import re
+
+    # Clean up model response
+    response_clean = response.replace(prompt, "").strip()
+
+    # Extract Skills and Recommendations robustly
+    skills_match = re.search(r"Skills\s*[:\-]\s*(.*?)(?:\n|$)", response_clean, re.IGNORECASE | re.DOTALL)
+    rec_match    = re.search(r"Recommendations\s*[:\-]\s*(.*)", response_clean, re.IGNORECASE | re.DOTALL)
+
+    skills = skills_match.group(1).strip() if skills_match else ""
+    recommendations = rec_match.group(1).strip() if rec_match else ""
+    # ✅ Return the extracted values
     return skills, recommendations
 # =========================
 # Full Pipeline
