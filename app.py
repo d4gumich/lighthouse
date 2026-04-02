@@ -32,7 +32,7 @@ LORA_REPO = "Data4GoodCenter/careermatch-llama3-8b-lora"
 DATA_PATH = "job_skill_results.csv"
 FAISS_DIR = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
-TOP_K = 5
+TOP_K = 3
 
 # =========================
 # Prepare directories
@@ -111,7 +111,7 @@ llm = pipeline(
     model=model,
     tokenizer=tokenizer,
     device=0 if device == "cuda" else -1,
-    max_new_tokens=500,
+    max_new_tokens=800,
     temperature=0.3,
     do_sample=False,
 )
@@ -151,7 +151,7 @@ STRICT INSTRUCTIONS:
 - Do NOT change labels.
 - Do NOT add extra text.
 Resume:
-{resume_text[:7000]}
+{resume_text[:8000]}
 Jobs:
 {job_context}
 Output format:
