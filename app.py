@@ -32,7 +32,7 @@ LORA_REPO = "Data4GoodCenter/careermatch-llama3-8b-lora"
 DATA_PATH = "job_skill_results.csv"
 FAISS_DIR = "data"
 FAISS_PATH = os.path.join(FAISS_DIR, "faiss.index")
-TOP_K = 3
+TOP_K = 5
 
 # =========================
 # Prepare directories
