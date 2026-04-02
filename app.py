@@ -111,7 +111,7 @@ llm = pipeline(
     model=model,
     tokenizer=tokenizer,
     device=0 if device == "cuda" else -1,
-    max_new_tokens=200,
+    max_new_tokens=500,
     temperature=0.3,
     do_sample=False,
 )
