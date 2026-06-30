@@ -1,0 +1,10 @@
+transformers
+torch
+accelerate
+bitsandbytes
+sentence-transformers
+peft
+gradio
+qdrant-client
+pandas
+numpy
