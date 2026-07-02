@@ -178,8 +178,8 @@ def generate_from_prompt(prompt, max_new_tokens=256):
         output_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            do_sample=True,          # FIX: consistent with temperature
-            temperature=0.3,         # FIX: now actually used
+            do_sample=False,          # FIX: consistent with temperature, was True before
+           # temperature=0.3,         # FIX: now actually used
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
             use_cache=True,
