@@ -197,11 +197,17 @@ def generate_from_prompt(prompt, max_new_tokens=256):
 # FIX: Separate prompt for extraction only — not mixed with matching/recommendation
 # =========================
 def extract_skills(resume_text):
-    resume_truncated = truncate_by_tokens(resume_text, max_tokens=2048)
+    resume_truncated = truncate_by_tokens(resume_text, max_tokens=2048)    #You are an expert resume parser. Extract all hard and soft skills explicitly or implicitly mentioned in the resume.
+#Return ONLY a comma-separated list of skills. No explanations, no job titles, no repeated skills, no extra text.
 
     prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are an expert resume parser. Extract all hard and soft skills explicitly or implicitly mentioned in the resume.
-Return ONLY a comma-separated list of skills. No explanations, no job titles, no repeated skills, no extra text.
+                  Extract ONLY the skills explicitly mentioned in the resume.
+                  Rules:
+                  - Do NOT infer skills.
+                  - Do NOT guess technologies.
+                  - Do NOT repeat skills.
+                  - If a skill is not written in the resume, do not include it.
+                  Return ONLY a comma-separated list.
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 Resume:
 {resume_truncated}
