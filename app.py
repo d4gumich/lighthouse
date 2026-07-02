@@ -209,6 +209,7 @@ Resume:
 Skills:"""
 
     raw = generate_from_prompt(prompt, max_new_tokens=200)  # FIX: tight token budget for structured output
+    print(raw)  #### CHECKING
 
     # Clean up — take only first line in case model adds extra text
     skills_line = raw.split("\n")[0].strip()
