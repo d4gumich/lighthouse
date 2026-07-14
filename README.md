@@ -1,5 +1,5 @@
 ---
-title: SkillMatch Resume Career Recommender
+title: Lighthouse Staging Environment Test
 emoji: 🚀
 colorFrom: blue
 colorTo: indigo
