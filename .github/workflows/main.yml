@@ -7,8 +7,9 @@ on:
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: Staging
     steps:
+      - run: echo "This job was automatically triggered by a ${{ github.event_name }}"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
