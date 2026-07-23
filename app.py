@@ -19,7 +19,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 # =========================
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
-print("**** delete after successful deployment test")
+print("****delete after successful deployment test")
 
 # =========================
 # HF Token
