@@ -1,5 +1,5 @@
 ---
-title: Lighthouse Production Environment Test
+title: Lighthouse Staging Environment Test
 emoji: 🚀
 colorFrom: blue
 colorTo: indigo
