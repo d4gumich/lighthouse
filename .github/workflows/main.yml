@@ -5,22 +5,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # deploy_to_staging:
-  #   runs-on: ubuntu-latest
-  #   environment: Staging
-  #   steps:
-  #     - run: echo "This job was automatically triggered by a ${{ github.event_name }}"
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
-  #         lfs: true
-  #     - name: Push to hub
-  #       env:
-  #         HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  #       run: git push --force https://user:$HF_TOKEN@huggingface.co/spaces/${{vars.HF_USERNAME}}/${{vars.SPACE_NAME}} main
-  deploy_to_production:
+  deploy_to_staging:
     runs-on: ubuntu-latest
-    environment: Production
+    environment: Staging
     steps:
       - run: echo "This job was automatically triggered by a ${{ github.event_name }}"
       - uses: actions/checkout@v4
@@ -31,3 +18,16 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: git push --force https://user:$HF_TOKEN@huggingface.co/spaces/${{vars.HF_USERNAME}}/${{vars.SPACE_NAME}} main
+  # deploy_to_production:
+  #   runs-on: ubuntu-latest
+  #   environment: Production
+  #   steps:
+  #     - run: echo "This job was automatically triggered by a ${{ github.event_name }}"
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
+  #         lfs: true
+  #     - name: Push to hub
+  #       env:
+  #         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  #       run: git push --force https://user:$HF_TOKEN@huggingface.co/spaces/${{vars.HF_USERNAME}}/${{vars.SPACE_NAME}} main
