@@ -8,3 +8,4 @@ gradio
 qdrant-client
 pandas
 numpy
+pre-commit
