@@ -1,0 +1,25 @@
+name: Qdrant keepalive
+
+on:
+  schedule:
+    - cron: "0 17 * * *"   # 12:00 CDT / 17:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Qdrant
+        env:
+          QDRANT_URL: ${{ vars.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/qdrant-body -w "%{http_code}" \
+            --max-time 30 \
+            -H "api-key: ${QDRANT_API_KEY}" \
+            "${QDRANT_URL%/}/readyz")
+          echo "HTTP $code"
+          cat /tmp/qdrant-body || true
+          test "$code" -ge 200 -a "$code" -lt 300
